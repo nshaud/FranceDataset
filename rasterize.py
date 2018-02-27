@@ -4,6 +4,16 @@ import rasterio.features
 import pyproj
 import geopandas as gpd
 from shapely.geometry import Polygon
+import os
+import argparse
+
+
+parser = argparse.ArgumentParser(description="Rasterize shapefiles based on an image mosaic")
+parser.add_argument('tiles', metavar='tiles', type=str, nargs='+', help="Raster files")
+parser.add_argument('--shapefile', type=str, help="Shapefile to use")
+parser.add_argument('--dataset', type=str, help="'UA' for UrbanAtlas or 'cadastre'")
+
+args = parser.parse_args()
 
 UA_codes = {'11100': 1,
  '11210': 2,
@@ -52,23 +62,36 @@ def burn_shapes(shapes, destination, meta):
 		out_arr = out.read(1)
 		burned = rasterio.features.rasterize(shapes=shapes, fill=0, out=out_arr, transform=out.transform)
 		out.write_band(1, burned)
-	
-rasters = ["../BDORTHO_libre/BDORTHO_2-0_RVB-0M50_JP2-E080_LAMB93_D006_2014-01-01/BDORTHO/1_DONNEES_LIVRAISON_2017-09-00107/BDO_RVB_0M50_JP2-E080_LAMB93_D06-2014/06-2014-1035-6300-LA93-0M50-E080.jp2"]
-rasters = rasters + rasters
 
-shapefile = gpd.read_file('../Urban_Atlas2012/FR205L2_NICE/Shapefiles/FR205L2_NICE_UA2012.shp')
+def get_shapes(clipped_shapes, mode=None):
+	if mode == 'UA':
+		shapes = [(geometry, UA_codes[item]) for geometry, item in zip(clipped_shapes.geometry, clipped_shapes['CODE2012'])]
+	elif mode == 'cadastre':
+		shapes = [(geometry, 255) for geometry in clipped_shapes.geometry]
+	else:
+		raise ValueError('Not implemented: {}.'.format(mode))
+	return shapes
 
-for raster in rasters:
-	# Load raster image
-	raster = rasterio.open(raster)
-	print(shapefile.crs)
-	print(raster.crs)
-	if shapefile.crs != raster.crs:
-		print("Reproject")
-		shapefile = shapefile.to_crs(raster.crs)
-	clipped_shapes = crop_shapefile_to_raster(shapefile, raster)
-	shapes = ((geometry, UA_codes[item]) for geometry, item in zip(clipped_shapes.geometry, clipped_shapes['CODE2012']))
-	meta = raster.meta.copy()
-	# Use only one channel
-	meta.update(count=1)
-	burn_shapes(shapes, 'test.tif', meta)
+
+if __name__ == '__main__':
+	rasters = args.tiles
+	shapefile = gpd.read_file(args.shapefile)
+
+	for raster in rasters:
+		filename, extension = os.path.splitext(raster)
+		destination = "{}_{}.{}".format(filename, args.dataset, 'tif')
+		# Load raster image
+		raster = rasterio.open(raster)
+		if shapefile.crs != raster.crs:
+			print("Reproject shapefile to {}".format(raster.crs['init']))
+			shapefile = shapefile.to_crs(raster.crs)
+		clipped_shapes = crop_shapefile_to_raster(shapefile, raster)
+		shapes = get_shapes(clipped_shapes, mode=args.dataset)
+		if len(shapes) == 0:
+			print("Skipping raster does not intersect with shapefile")
+			continue
+		meta = raster.meta.copy()
+		# Use only one channel
+		meta.update(count=1)
+		print("Saving to {}".format(destination))
+		burn_shapes(shapes, destination, meta)
