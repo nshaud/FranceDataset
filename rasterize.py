@@ -1,4 +1,5 @@
 import fiona
+import fiona.crs
 import rasterio
 import rasterio.features
 import pyproj
@@ -6,14 +7,13 @@ import geopandas as gpd
 from shapely.geometry import Polygon
 import os
 import argparse
-
+from tqdm import tqdm
 
 parser = argparse.ArgumentParser(description="Rasterize shapefiles based on an image mosaic")
 parser.add_argument('tiles', metavar='tiles', type=str, nargs='+', help="Raster files")
 parser.add_argument('--shapefile', type=str, help="Shapefile to use")
 parser.add_argument('--dataset', type=str, help="'UA' for UrbanAtlas or 'cadastre'")
 
-args = parser.parse_args()
 
 UA_codes = {'11100': 1,
  '11210': 2,
@@ -45,7 +45,6 @@ UA_codes = {'11100': 1,
  '91000': 28,
  '92000': 29}
 
-
 def crop_shapefile_to_raster(shapefile, raster):
 	xmin, ymin, xmax, ymax = raster.bounds
 	bounds = Polygon( [(xmin,ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin)] )
@@ -72,26 +71,44 @@ def get_shapes(clipped_shapes, mode=None):
 		raise ValueError('Not implemented: {}.'.format(mode))
 	return shapes
 
+def reproject(shapefile, crs):
+	return shapefile.to_crs(crs) if shapefile.crs != crs else shapefile
 
-if __name__ == '__main__':
-	rasters = args.tiles
-	shapefile = gpd.read_file(args.shapefile)
-
-	for raster in rasters:
-		filename, extension = os.path.splitext(raster)
-		destination = "{}_{}.{}".format(filename, args.dataset, 'tif')
-		# Load raster image
-		raster = rasterio.open(raster)
-		if shapefile.crs != raster.crs:
-			print("Reproject shapefile to {}".format(raster.crs['init']))
-			shapefile = shapefile.to_crs(raster.crs)
-		clipped_shapes = crop_shapefile_to_raster(shapefile, raster)
-		shapes = get_shapes(clipped_shapes, mode=args.dataset)
-		if len(shapes) == 0:
-			print("Skipping raster does not intersect with shapefile")
-			continue
+def clip_and_burn(shapefile, raster, destination):
+	if shapefile.crs != raster.crs:
+		tqdm.write("Unknown new CRS: {}".format(raster.crs.to_string()))
+		shapefile = reproject(shapefile, raster.crs)
+	#tqdm.write("Clipping...")
+	clipped_shapes = crop_shapefile_to_raster(shapefile, raster)
+	shapes = get_shapes(clipped_shapes, mode=args.dataset)
+	if len(shapes) == 0:
+		tqdm.write("Skipping: raster does not intersect with shapefile")
+	else:
 		meta = raster.meta.copy()
 		# Use only one channel
 		meta.update(count=1)
-		print("Saving to {}".format(destination))
+		#tqdm.write("Saving to {}".format(destination))
 		burn_shapes(shapes, destination, meta)
+
+if __name__ == '__main__':
+	args = parser.parse_args()
+	rasters = args.tiles
+	print("Loading shapefile... ", end="")
+	shapefile = gpd.read_file(args.shapefile)
+	print("Done.")
+	with rasterio.open(rasters[0]) as raster:
+		# Load first raster image
+		raster = rasterio.open(rasters[0])
+		if raster.crs != shapefile.crs:
+			print("Reproject shapefile from {} to {}.".format(fiona.crs.to_string(shapefile.crs), raster.crs.to_string()))
+			shapefile = reproject(shapefile, raster.crs)
+
+	print("Start processing.")
+	t_rasters = tqdm(rasters)
+	for raster_file in t_rasters:
+		t_rasters.set_description("Processing {}".format(os.path.basename(raster_file)))
+		filename, extension = os.path.splitext(raster_file)
+		destination = "{}_{}.{}".format(filename, args.dataset, 'tif')
+		with rasterio.open(raster_file) as raster:
+			clip_and_burn(shapefile, raster, destination)
+
