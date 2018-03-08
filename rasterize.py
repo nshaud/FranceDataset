@@ -12,10 +12,10 @@ from tqdm import tqdm
 parser = argparse.ArgumentParser(description="Rasterize shapefiles based on an image mosaic")
 parser.add_argument('tiles', metavar='tiles', type=str, nargs='+', help="Raster files")
 parser.add_argument('--shapefiles', type=str, nargs='+', help="Shapefiles to use")
-parser.add_argument('--dataset', type=str, help="'UA' for UrbanAtlas or 'cadastre'")
+parser.add_argument('--dataset', type=str, help="'UA2012' or 'UA2006' for UrbanAtlas or 'cadastre'")
 
 
-UA_codes = {'11100': 1,
+UA2012_codes = {'11100': 1,
  '11210': 2,
  '11220': 3,
  '11230': 4,
@@ -68,8 +68,8 @@ def burn_shapes(shapes, destination, meta):
 		out.write_band(1, burned)
 
 def get_shapes(clipped_shapes, mode=None):
-	if mode == 'UA':
-		shapes = [(geometry, UA_codes[item]) for geometry, item in zip(clipped_shapes.geometry, clipped_shapes['CODE2012'])]
+	if mode == 'UA2012':
+		shapes = [(geometry, UA2012_codes[item]) for geometry, item in zip(clipped_shapes.geometry, clipped_shapes['CODE2012'])]
 	elif mode == 'cadastre':
 		shapes = [(geometry, 255) for geometry in clipped_shapes.geometry]
 	else:
