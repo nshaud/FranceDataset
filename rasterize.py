@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 parser = argparse.ArgumentParser(description="Rasterize shapefiles based on an image mosaic")
 parser.add_argument('tiles', metavar='tiles', type=str, nargs='+', help="Raster files")
-parser.add_argument('--shapefile', type=str, help="Shapefile to use")
+parser.add_argument('--shapefiles', type=str, nargs='+', help="Shapefiles to use")
 parser.add_argument('--dataset', type=str, help="'UA' for UrbanAtlas or 'cadastre'")
 
 
@@ -47,13 +47,18 @@ UA_codes = {'11100': 1,
 
 def crop_shapefile_to_raster(shapefile, raster):
 	xmin, ymin, xmax, ymax = raster.bounds
-	bounds = Polygon( [(xmin,ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin)] )
-	# Compute the intersection of the bounds with the shapes
-	shapefile = shapefile.copy()
-	shapefile['geometry'] = shapefile['geometry'].intersection(bounds)
-	# Filter empty shapes
-	shapes_cropped = shapefile[shapefile.geometry.area>0]
-	return shapes_cropped
+	xmin_s, ymin_s, xmax_s, ymax_s = shapefile.total_bounds
+	bounds_shp = Polygon( [(xmin_s,ymin_s), (xmin_s, ymax_s), (xmax_s, ymax_s), (xmax_s, ymin_s)] )
+	bounds_raster = Polygon( [(xmin,ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin)] )
+	if bounds_shp.intersects(bounds_raster):
+		# Compute the intersection of the bounds with the shapes
+		shapefile = shapefile.copy()
+		shapefile['geometry'] = shapefile['geometry'].intersection(bounds_raster)
+		# Filter empty shapes
+		shapes_cropped = shapefile[shapefile.geometry.area>0]
+		return shapes_cropped
+	else:
+		return None
 
 
 def burn_shapes(shapes, destination, meta):
@@ -74,13 +79,16 @@ def get_shapes(clipped_shapes, mode=None):
 def reproject(shapefile, crs):
 	return shapefile.to_crs(crs) if shapefile.crs != crs else shapefile
 
-def clip_and_burn(shapefile, raster, destination):
-	if shapefile.crs != raster.crs:
-		tqdm.write("Unknown new CRS: {}".format(raster.crs.to_string()))
-		shapefile = reproject(shapefile, raster.crs)
+def clip_and_burn(shapefiles, raster, destination):
 	#tqdm.write("Clipping...")
-	clipped_shapes = crop_shapefile_to_raster(shapefile, raster)
-	shapes = get_shapes(clipped_shapes, mode=args.dataset)
+	shapes = []
+	for shapefile in shapefiles:
+		if shapefile.crs != raster.crs:
+			tqdm.write("Unknown new CRS: {}".format(raster.crs.to_string()))
+			shapefile = reproject(shapefile, raster.crs)
+		clipped_shapes = crop_shapefile_to_raster(shapefile, raster)
+		if clipped_shapes is not None:
+		    shapes += get_shapes(clipped_shapes, mode=args.dataset)
 	if len(shapes) == 0:
 		tqdm.write("Skipping: raster does not intersect with shapefile")
 	else:
@@ -94,14 +102,15 @@ if __name__ == '__main__':
 	args = parser.parse_args()
 	rasters = args.tiles
 	print("Loading shapefile... ", end="")
-	shapefile = gpd.read_file(args.shapefile)
+	shapefiles = [gpd.read_file(shp) for shp in tqdm(args.shapefiles, desc="Reading shapefiles...")]
 	print("Done.")
 	with rasterio.open(rasters[0]) as raster:
 		# Load first raster image
 		raster = rasterio.open(rasters[0])
-		if raster.crs != shapefile.crs:
-			print("Reproject shapefile from {} to {}.".format(fiona.crs.to_string(shapefile.crs), raster.crs.to_string()))
-			shapefile = reproject(shapefile, raster.crs)
+		for idx, shapefile in enumerate(shapefiles):
+			if raster.crs != shapefile.crs:
+				print("Reproject shapefile from {} to {}.".format(fiona.crs.to_string(shapefile.crs), raster.crs.to_string()))
+				shapefiles[idx] = reproject(shapefile, raster.crs)
 
 	print("Start processing.")
 	t_rasters = tqdm(rasters)
@@ -110,5 +119,5 @@ if __name__ == '__main__':
 		filename, extension = os.path.splitext(raster_file)
 		destination = "{}_{}.{}".format(filename, args.dataset, 'tif')
 		with rasterio.open(raster_file) as raster:
-			clip_and_burn(shapefile, raster, destination)
+			clip_and_burn(shapefiles, raster, destination)
 
