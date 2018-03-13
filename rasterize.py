@@ -13,6 +13,7 @@ parser = argparse.ArgumentParser(description="Rasterize shapefiles based on an i
 parser.add_argument('tiles', metavar='tiles', type=str, nargs='+', help="Raster files")
 parser.add_argument('--shapefiles', type=str, nargs='+', help="Shapefiles to use")
 parser.add_argument('--dataset', type=str, help="'UA2012' or 'UA2006' for UrbanAtlas or 'cadastre'")
+parser.add_argument('--dry', type=bool, const=True, nargs='?', help="Use to force a dry run (nothing is written).")
 
 
 UA2012_codes = {'11100': 1,
@@ -113,11 +114,14 @@ if __name__ == '__main__':
 				shapefiles[idx] = reproject(shapefile, raster.crs)
 
 	print("Start processing.")
+	if args.dry:
+		print("DRY RUN --- NOTHING WILL BE WRITTEN !")
 	t_rasters = tqdm(rasters)
 	for raster_file in t_rasters:
 		t_rasters.set_description("Processing {}".format(os.path.basename(raster_file)))
 		filename, extension = os.path.splitext(raster_file)
 		destination = "{}_{}.{}".format(filename, args.dataset, 'tif')
-		with rasterio.open(raster_file) as raster:
-			clip_and_burn(shapefiles, raster, destination)
+		if not args.dry:
+			with rasterio.open(raster_file) as raster:
+				clip_and_burn(shapefiles, raster, destination)
 
