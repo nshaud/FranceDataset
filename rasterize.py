@@ -44,7 +44,9 @@ UA2012_codes = {'11100': 1,
  '40000': 26,
  '50000': 27,
  '91000': 28,
- '92000': 29}
+ '92000': 29,
+ '25400': 28,
+ '25500': 29}
 
 def crop_shapefile_to_raster(shapefile, raster):
 	xmin, ymin, xmax, ymax = raster.bounds
