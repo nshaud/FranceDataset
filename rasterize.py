@@ -8,13 +8,14 @@ from shapely.geometry import Polygon
 import os
 import argparse
 from tqdm import tqdm
+import datetime
 
 parser = argparse.ArgumentParser(description="Rasterize shapefiles based on an image mosaic")
 parser.add_argument('tiles', metavar='tiles', type=str, nargs='+', help="Raster files")
 parser.add_argument('--shapefiles', type=str, nargs='+', help="Shapefiles to use")
 parser.add_argument('--dataset', type=str, help="'UA2012' or 'UA2006' for UrbanAtlas or 'cadastre'")
 parser.add_argument('--dry', type=bool, const=True, nargs='?', help="Use to force a dry run (nothing is written).")
-
+parser.add_argument('--end_date', type=str, default=None, nargs='?', help="For 'cadastre' dataset, remove all objects created after this date ('YYYY-mm-dd' format).")
 
 UA2012_codes = {'11100': 1,
  '11210': 2,
@@ -91,7 +92,7 @@ def clip_and_burn(shapefiles, raster, destination):
 			shapefile = reproject(shapefile, raster.crs)
 		clipped_shapes = crop_shapefile_to_raster(shapefile, raster)
 		if clipped_shapes is not None:
-		    shapes += get_shapes(clipped_shapes, mode=args.dataset)
+			shapes += get_shapes(clipped_shapes, mode=args.dataset)
 	if len(shapes) == 0:
 		tqdm.write("Skipping: raster does not intersect with shapefile")
 	else:
@@ -101,11 +102,24 @@ def clip_and_burn(shapefiles, raster, destination):
 		#tqdm.write("Saving to {}".format(destination))
 		burn_shapes(shapes, destination, meta)
 
+def filter_shapefile(shapefile, end_date=None):
+	end_date = datetime.datetime.strptime(end_date, '%Y-%m-%d')
+	to_drop = []
+	for i in range(len(shapefile)):
+		created = shapefile.at[i, 'created']
+		creation_date = datetime.datetime.strptime(created, '%Y-%m-%d')
+		if creation_date > end_date:
+			to_drop.append(i)
+	tqdm.write("Filtered {} buildings over {}".format(len(to_drop), len(shapefile)))
+	return shapefile.drop(to_drop)
+
 if __name__ == '__main__':
 	args = parser.parse_args()
 	rasters = args.tiles
-	print("Loading shapefile... ", end="")
 	shapefiles = [gpd.read_file(shp) for shp in tqdm(args.shapefiles, desc="Reading shapefiles...")]
+	if args.end_date is not None:
+		tqdm.write("Filtering all buildings created after {}".format(args.end_date))
+		shapefiles = [filter_shapefile(s, end_date=args.end_date) for s in shapefiles]
 	print("Done.")
 	with rasterio.open(rasters[0]) as raster:
 		# Load first raster image
