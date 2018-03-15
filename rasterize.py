@@ -15,6 +15,7 @@ parser.add_argument('tiles', metavar='tiles', type=str, nargs='+', help="Raster 
 parser.add_argument('--shapefiles', type=str, nargs='+', help="Shapefiles to use")
 parser.add_argument('--dataset', type=str, help="'UA2012' or 'UA2006' for UrbanAtlas or 'cadastre'")
 parser.add_argument('--dry', type=bool, const=True, nargs='?', help="Use to force a dry run (nothing is written).")
+parser.add_argument('--skip', type=bool, const=True, nargs='?', help="Use to skip existing rasters and avoid re-writing (useful to resume an aborted job).")
 parser.add_argument('--end_date', type=str, default=None, nargs='?', help="For 'cadastre' dataset, remove all objects created after this date ('YYYY-mm-dd' format).")
 
 UA2012_codes = {'11100': 1,
@@ -120,17 +121,20 @@ def reproject(shapefile, crs):
         """
 	return shapefile.to_crs(crs) if shapefile.crs != crs else shapefile
 
-def clip_and_burn(shapefiles, raster, destination):
-        """
-            Rasterize several shapefiles on a specific raster
+def clip_and_burn(shapefiles, raster, destination, skip_existing=False, filters=None):
+	"""
+	    Rasterize several shapefiles on a specific raster
 
-            This burns the objects contained in the shapefiles based on the raster
-            extent into a new raster.
+	    This burns the objects contained in the shapefiles based on the raster
+	    extent into a new raster.
 
-            :param shapefiles: a list of GeoDataFrame objects
-            :param raster: a RasterIO raster object
-            :param destination: path to the raster to write
-        """
+	    :param shapefiles: a list of GeoDataFrame objects
+	    :param raster: a RasterIO raster object
+	    :param destination: path to the raster to write
+	    :param skip_existing: set to True to avoid re-writing on existing rasters
+	"""
+	if skip_existing and os.path.exists(destination):
+		return
 	#tqdm.write("Clipping...")
 	shapes = []
 	for shapefile in shapefiles:
@@ -207,5 +211,4 @@ if __name__ == '__main__':
 		destination = "{}_{}.{}".format(filename, args.dataset, 'tif')
 		if not args.dry:
 			with rasterio.open(raster_file) as raster:
-				clip_and_burn(shapefiles, raster, destination)
-
+				clip_and_burn(shapefiles, raster, destination, skip_existing=args.skip, filters=filters)
