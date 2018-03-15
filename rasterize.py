@@ -4,11 +4,15 @@ import rasterio
 import rasterio.features
 import pyproj
 import geopandas as gpd
+import shapely.geometry
 from shapely.geometry import Polygon
 import os
 import argparse
 from tqdm import tqdm
 import datetime
+import pyproj
+from functools import partial
+
 
 parser = argparse.ArgumentParser(description="Rasterize shapefiles based on an image mosaic")
 parser.add_argument('tiles', metavar='tiles', type=str, nargs='+', help="Raster files")
@@ -51,24 +55,23 @@ UA2012_codes = {'11100': 1,
  '25500': 29}
 
 def crop_shapefile_to_raster(shapefile, raster):
-        """
-            Intersects of a GeoDataFrame with a raster
+	"""
+	    Intersects of a GeoDataFrame with a raster
 
-            This creates the intersection between a Geopandas shapefile and a
-            rasterio raster. It returns a new shapefile containing only the polygons
-            resulting from this intersection.
+	    This creates the intersection between a Geopandas shapefile and a
+	    rasterio raster. It returns a new shapefile containing only the polygons
+	    resulting from this intersection.
 
-            :param shapefile: reference GeoDataFrame
-            :param raster: RasterIO raster object
-            :return: a GeoDataFrame containing the intersected polygons
-        """
+	    :param shapefile: reference GeoDataFrame
+	    :param raster: RasterIO raster object
+	    :return: a GeoDataFrame containing the intersected polygons
+	"""
 	xmin, ymin, xmax, ymax = raster.bounds
 	xmin_s, ymin_s, xmax_s, ymax_s = shapefile.total_bounds
 	bounds_shp = Polygon( [(xmin_s,ymin_s), (xmin_s, ymax_s), (xmax_s, ymax_s), (xmax_s, ymin_s)] )
 	bounds_raster = Polygon( [(xmin,ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin)] )
 	if bounds_shp.intersects(bounds_raster):
 		# Compute the intersection of the bounds with the shapes
-		shapefile = shapefile.copy()
 		shapefile['geometry'] = shapefile['geometry'].intersection(bounds_raster)
 		# Filter empty shapes
 		shapes_cropped = shapefile[shapefile.geometry.area>0]
@@ -78,31 +81,31 @@ def crop_shapefile_to_raster(shapefile, raster):
 
 
 def burn_shapes(shapes, destination, meta):
-        """
-            Writes a list of shapes and values in a raster
+	"""
+	    Writes a list of shapes and values in a raster
 
-            For each (polygon, value) in shapes, this burns the value in the
-            specified raster based on the polygon. Additionnal raster parameters
-            can be controlled with the meta dictionary.
+	    For each (polygon, value) in shapes, this burns the value in the
+	    specified raster based on the polygon. Additionnal raster parameters
+	    can be controlled with the meta dictionary.
 
-            :param shapes: list of (polygon, value) tuples
-            :param destination: string containing the path to the raster
-            :param meta: meta dictionary for raster management (RasterIO format)
-        """
+	    :param shapes: list of (polygon, value) tuples
+	    :param destination: string containing the path to the raster
+	    :param meta: meta dictionary for raster management (RasterIO format)
+	"""
 	with rasterio.open(destination, 'w', **meta) as out:
 		out_arr = out.read(1)
 		burned = rasterio.features.rasterize(shapes=shapes, fill=0, out=out_arr, transform=out.transform)
 		out.write_band(1, burned)
 
 def get_shapes(clipped_shapes, mode=None):
-        """
-            Extract a list of (polygon, value) tuples using specific dataset rules
-            from a GeoDataFrame.
+	"""
+	    Extract a list of (polygon, value) tuples using specific dataset rules
+	    from a GeoDataFrame.
 
-            :param clipped_shapes: GeoDataFrame to be processed
-            :param mode: dataset name ('UA2012', 'cadastre')
-            :return: a list of (polygon, value) tuples
-        """
+	    :param clipped_shapes: GeoDataFrame to be processed
+	    :param mode: dataset name ('UA2012', 'cadastre')
+	    :return: a list of (polygon, value) tuples
+	"""
 	if mode == 'UA2012':
 		shapes = [(geometry, UA2012_codes[item]) for geometry, item in zip(clipped_shapes.geometry, clipped_shapes['CODE2012'])]
 	elif mode == 'cadastre':
@@ -112,13 +115,13 @@ def get_shapes(clipped_shapes, mode=None):
 	return shapes
 
 def reproject(shapefile, crs):
-        """
-            Reproject a shapefile to a specific CoordinateReferenceSystem
+	"""
+	    Reproject a shapefile to a specific CoordinateReferenceSystem
 
-            :param shapefile: a GeoDataFrame
-            :param crs: CoordinateReferenceSystem
-            :return: the projected GeoDataFrame
-        """
+	    :param shapefile: a GeoDataFrame
+	    :param crs: CoordinateReferenceSystem
+	    :return: the projected GeoDataFrame
+	"""
 	return shapefile.to_crs(crs) if shapefile.crs != crs else shapefile
 
 def clip_and_burn(shapefiles, raster, destination, skip_existing=False, filters=None):
@@ -138,8 +141,17 @@ def clip_and_burn(shapefiles, raster, destination, skip_existing=False, filters=
 	#tqdm.write("Clipping...")
 	shapes = []
 	for shapefile in shapefiles:
+		bbox = project_bbox(raster.crs, shapefile.crs, raster.bounds)
+		shp_crs = shapefile.crs
+		s = (s[1] for s in shapefile.items(bbox=bbox))
+		s = list(filter_shapefile(s, **filters))
+		tqdm.write("{} objects in raster".format(len(s)))
+		shapefile = gpd.GeoDataFrame.from_features(s, crs=shp_crs)
+		if shapefile.empty:
+			continue
+
 		if shapefile.crs != raster.crs:
-			tqdm.write("Unknown new CRS: {}".format(raster.crs.to_string()))
+			#tqdm.write("Unknown new CRS: {}".format(raster.crs.to_string()))
 			shapefile = reproject(shapefile, raster.crs)
 		clipped_shapes = crop_shapefile_to_raster(shapefile, raster)
 		if clipped_shapes is not None:
@@ -149,57 +161,82 @@ def clip_and_burn(shapefiles, raster, destination, skip_existing=False, filters=
 	else:
 		meta = raster.meta.copy()
 		# Use only one channel
-		meta.update(count=1)
+		meta.update(count=1, driver='GTiff', compress='lzw', dtype=rasterio.uint8)
 		#tqdm.write("Saving to {}".format(destination))
 		burn_shapes(shapes, destination, meta)
 
-def filter_shapefile(shapefile, end_date=None):
-        """
-            This filters out objects from a shapefile based on pre-defined rules.
+def str_to_date(date):
+	"""
+		Fast conversion between 'YYYY-mm-dd' string to Python date
 
-            :param shapefile: a GeoDataFrame
-            :param end_date: drops all objects with a 'creation_date' after this value
-                             (default is None)
-            :return: the filtered GeoDataFrame
-        """
-	end_date = datetime.datetime.strptime(end_date, '%Y-%m-%d')
-	to_drop = []
-	for i in range(len(shapefile)):
-		created = shapefile.at[i, 'created']
-		creation_date = datetime.datetime.strptime(created, '%Y-%m-%d')
-		if creation_date > end_date:
-			to_drop.append(i)
-	tqdm.write("Filtered {} buildings over {}".format(len(to_drop), len(shapefile)))
-	return shapefile.drop(to_drop)
+		:param date: 'YYYY-mm-dd' string
+		:return: Python datetime.date object
+	"""
+	return datetime.date(*map(int, date.split('-')))
+
+def filter_shapefile(shapefile, end_date=None, clean=True):
+	"""
+	    This filters out objects from a shapefile based on pre-defined rules.
+
+	    :param shapefile: a Fiona Collection shapefile
+	    :param end_date: drops all objects with a 'creation_date' after this value
+			     (default is None)
+	    :return: the filtered GeoDataFrame
+	"""
+
+	if end_date is not None:
+		end_date = str_to_date(end_date)
+	
+	def clean_func(shp):
+		shape = shapely.geometry.shape(shp['geometry'])
+		if not shape.is_valid:
+			shp['geometry'] = shapely.geometry.mapping(shape.buffer(0))
+		return shp
+
+	def filter_date_func(shp):
+		return str_to_date(shp['properties']['created']) < end_date
+
+	if end_date is not None:
+		shapefile = filter(filter_date_func, shapefile)
+	shapefile = map(clean_func, shapefile)
+	return shapefile
 
 def clean(shapefile):
-        """
-            Cleans invalid polygons from the shapefile.
+	"""
+	    Cleans invalid polygons from the shapefile.
 
-            This works by adding a 0-width buffer to force invalid polygons
-            to be valid again in the shapefile.
+	    This works by adding a 0-width buffer to force invalid polygons
+	    to be valid again in the shapefile.
 
-            :param shapefile: a GeoDataFrame
-            :return: a clean GeoDataFrame
-        """
-        shapefile['geometry'] = shapefile.buffer(0)
-        return shapefile
+	    :param shapefile: a GeoDataFrame
+	    :return: a clean GeoDataFrame
+	"""
+	shapefile['geometry'] = shapefile.buffer(0)
+	return shapefile
+
+def project_bbox(crs_in, crs_out, bounds):
+	"""
+	    Project a bounding box from a CRS to another
+
+	    :param crs_in: an input CoordinateReferenceSystem
+	    :param crs_out: the target CoordinateReferenceSystem
+	    :param bounds: a tuple of bounds (xmin, ymin, xmax, ymax)
+	    :param return: the tuple of projected bounds
+	"""
+	xmin, ymin, xmax, ymax = bounds
+	bbox = [(xmin,ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin)]
+	transform = partial(pyproj.transform, pyproj.Proj(crs_in), pyproj.Proj(crs_out))
+	new_coords = []
+	for x1, y1 in bbox:
+		x2, y2 = transform(x1, y1)
+		new_coords.append((x2, y2))
+	return Polygon(new_coords).bounds
 
 if __name__ == '__main__':
 	args = parser.parse_args()
 	rasters = args.tiles
-	shapefiles = [clean(gpd.read_file(shp)) for shp in tqdm(args.shapefiles, desc="Reading shapefiles...")]
-	if args.end_date is not None:
-		tqdm.write("Filtering all buildings created after {}".format(args.end_date))
-		shapefiles = [filter_shapefile(s, end_date=args.end_date) for s in shapefiles]
-	print("Done.")
-	with rasterio.open(rasters[0]) as raster:
-		# Load first raster image
-		raster = rasterio.open(rasters[0])
-		for idx, shapefile in enumerate(shapefiles):
-			if raster.crs != shapefile.crs:
-				print("Reproject shapefile from {} to {}.".format(fiona.crs.to_string(shapefile.crs), raster.crs.to_string()))
-				shapefiles[idx] = reproject(shapefile, raster.crs)
+	shapefiles = [fiona.open(shp) for shp in args.shapefiles]
+	filters = {'end_date': args.end_date, 'clean': True}
 
 	print("Start processing.")
 	if args.dry:
