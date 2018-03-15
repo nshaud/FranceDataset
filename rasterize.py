@@ -113,10 +113,14 @@ def filter_shapefile(shapefile, end_date=None):
 	tqdm.write("Filtered {} buildings over {}".format(len(to_drop), len(shapefile)))
 	return shapefile.drop(to_drop)
 
+def clean(shapefile):
+        shapefile['geometry'] = shapefile.buffer(0)
+        return shapefile
+
 if __name__ == '__main__':
 	args = parser.parse_args()
 	rasters = args.tiles
-	shapefiles = [gpd.read_file(shp) for shp in tqdm(args.shapefiles, desc="Reading shapefiles...")]
+	shapefiles = [clean(gpd.read_file(shp)) for shp in tqdm(args.shapefiles, desc="Reading shapefiles...")]
 	if args.end_date is not None:
 		tqdm.write("Filtering all buildings created after {}".format(args.end_date))
 		shapefiles = [filter_shapefile(s, end_date=args.end_date) for s in shapefiles]
