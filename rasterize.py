@@ -50,6 +50,17 @@ UA2012_codes = {'11100': 1,
  '25500': 29}
 
 def crop_shapefile_to_raster(shapefile, raster):
+        """
+            Intersects of a GeoDataFrame with a raster
+
+            This creates the intersection between a Geopandas shapefile and a
+            rasterio raster. It returns a new shapefile containing only the polygons
+            resulting from this intersection.
+
+            :param shapefile: reference GeoDataFrame
+            :param raster: RasterIO raster object
+            :return: a GeoDataFrame containing the intersected polygons
+        """
 	xmin, ymin, xmax, ymax = raster.bounds
 	xmin_s, ymin_s, xmax_s, ymax_s = shapefile.total_bounds
 	bounds_shp = Polygon( [(xmin_s,ymin_s), (xmin_s, ymax_s), (xmax_s, ymax_s), (xmax_s, ymin_s)] )
@@ -66,12 +77,31 @@ def crop_shapefile_to_raster(shapefile, raster):
 
 
 def burn_shapes(shapes, destination, meta):
+        """
+            Writes a list of shapes and values in a raster
+
+            For each (polygon, value) in shapes, this burns the value in the
+            specified raster based on the polygon. Additionnal raster parameters
+            can be controlled with the meta dictionary.
+
+            :param shapes: list of (polygon, value) tuples
+            :param destination: string containing the path to the raster
+            :param meta: meta dictionary for raster management (RasterIO format)
+        """
 	with rasterio.open(destination, 'w', **meta) as out:
 		out_arr = out.read(1)
 		burned = rasterio.features.rasterize(shapes=shapes, fill=0, out=out_arr, transform=out.transform)
 		out.write_band(1, burned)
 
 def get_shapes(clipped_shapes, mode=None):
+        """
+            Extract a list of (polygon, value) tuples using specific dataset rules
+            from a GeoDataFrame.
+
+            :param clipped_shapes: GeoDataFrame to be processed
+            :param mode: dataset name ('UA2012', 'cadastre')
+            :return: a list of (polygon, value) tuples
+        """
 	if mode == 'UA2012':
 		shapes = [(geometry, UA2012_codes[item]) for geometry, item in zip(clipped_shapes.geometry, clipped_shapes['CODE2012'])]
 	elif mode == 'cadastre':
@@ -81,9 +111,26 @@ def get_shapes(clipped_shapes, mode=None):
 	return shapes
 
 def reproject(shapefile, crs):
+        """
+            Reproject a shapefile to a specific CoordinateReferenceSystem
+
+            :param shapefile: a GeoDataFrame
+            :param crs: CoordinateReferenceSystem
+            :return: the projected GeoDataFrame
+        """
 	return shapefile.to_crs(crs) if shapefile.crs != crs else shapefile
 
 def clip_and_burn(shapefiles, raster, destination):
+        """
+            Rasterize several shapefiles on a specific raster
+
+            This burns the objects contained in the shapefiles based on the raster
+            extent into a new raster.
+
+            :param shapefiles: a list of GeoDataFrame objects
+            :param raster: a RasterIO raster object
+            :param destination: path to the raster to write
+        """
 	#tqdm.write("Clipping...")
 	shapes = []
 	for shapefile in shapefiles:
@@ -103,6 +150,14 @@ def clip_and_burn(shapefiles, raster, destination):
 		burn_shapes(shapes, destination, meta)
 
 def filter_shapefile(shapefile, end_date=None):
+        """
+            This filters out objects from a shapefile based on pre-defined rules.
+
+            :param shapefile: a GeoDataFrame
+            :param end_date: drops all objects with a 'creation_date' after this value
+                             (default is None)
+            :return: the filtered GeoDataFrame
+        """
 	end_date = datetime.datetime.strptime(end_date, '%Y-%m-%d')
 	to_drop = []
 	for i in range(len(shapefile)):
@@ -114,6 +169,15 @@ def filter_shapefile(shapefile, end_date=None):
 	return shapefile.drop(to_drop)
 
 def clean(shapefile):
+        """
+            Cleans invalid polygons from the shapefile.
+
+            This works by adding a 0-width buffer to force invalid polygons
+            to be valid again in the shapefile.
+
+            :param shapefile: a GeoDataFrame
+            :return: a clean GeoDataFrame
+        """
         shapefile['geometry'] = shapefile.buffer(0)
         return shapefile
 
