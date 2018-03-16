@@ -232,8 +232,7 @@ def project_bbox(crs_in, crs_out, bounds):
 		new_coords.append((x2, y2))
 	return Polygon(new_coords).bounds
 
-if __name__ == '__main__':
-	args = parser.parse_args()
+def rasterize(args):
 	rasters = args.tiles
 	shapefiles = [fiona.open(shp) for shp in args.shapefiles]
 	filters = {'end_date': args.end_date, 'clean': True}
@@ -249,3 +248,8 @@ if __name__ == '__main__':
 		if not args.dry:
 			with rasterio.open(raster_file) as raster:
 				clip_and_burn(shapefiles, raster, destination, skip_existing=args.skip, filters=filters)
+
+
+if __name__ == '__main__':
+	args = parser.parse_args()
+	rasterize(args)
